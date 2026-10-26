@@ -29,7 +29,9 @@ function buildCsp(nonce: string): string {
     isDev
       ? `script-src 'self' 'nonce-${nonce}' 'unsafe-eval'`
       : `script-src 'self' 'nonce-${nonce}'`,
-    `style-src 'self' 'nonce-${nonce}'`,
+    // Components use inline style attributes, which nonces never cover; a nonce here
+    // would also make browsers ignore 'unsafe-inline'. Scripts stay nonce-only.
+    "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     "connect-src 'self'",
