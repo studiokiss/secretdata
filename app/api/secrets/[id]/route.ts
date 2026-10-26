@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSecret } from '@/lib/storage';
+import { consumeSecret } from '@/lib/storage';
 import { checkRateLimit, recordLoginAttempt } from '@/lib/auth';
 
 // Rate limiting prevents ID enumeration attacks
@@ -44,8 +44,7 @@ export async function GET(
       );
     }
 
-    // Get secret
-    const shardData = await getSecret(id);
+    const shardData = await consumeSecret(id);
 
     if (!shardData) {
       // Record failed attempt (never reset on success to prevent enumeration bypass)
@@ -58,9 +57,11 @@ export async function GET(
     }
 
     // Do NOT reset rate limit on success — prevents alternating success/failure bypass
-    return NextResponse.json({
-      shards: shardData.shards,
-    });
+    return NextResponse.json(
+      { shards: shardData.shards },
+      // The shards no longer exist server-side: no cache may replay them
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
   } catch (error) {
     console.error('[API/SECRETS] GET error:', error);
     return NextResponse.json(
