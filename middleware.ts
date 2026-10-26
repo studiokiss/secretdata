@@ -102,6 +102,9 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
+  // Token revocation lives in Redis, and ioredis cannot load in the Edge runtime:
+  // there the revocation check silently fell back to an empty in-memory store.
+  runtime: 'nodejs',
   matcher: [
     // Match all pages and API routes (exclude static files)
     '/((?!_next/static|_next/image|favicon\\.ico|favicon\\.svg|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
