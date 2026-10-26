@@ -358,47 +358,47 @@ export default function ShortUrlViewer() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // Fetch shards on mount
+  // Shards are fetched on decrypt, not on mount: the server deletes them on first
+  // fetch, so merely opening the link (or a link preview) must not burn the secret.
   useEffect(() => {
-    const fetchShards = async () => {
-      try {
-        // Get seed from hash
-        const hash = window.location.hash.substring(1);
-        if (!hash) {
-          setError("Missing decryption key in URL");
-          setStatus("error");
-          return;
-        }
-        setSeed(hash);
-
-        // Fetch shards from API
-        const response = await fetch(`/api/secrets/${secretId}`);
-
-        if (response.status === 404) {
-          setError("Secret not found or expired");
-          setStatus("expired");
-          return;
-        }
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch secret");
-        }
-
-        const data = await response.json();
-        setShards(data.shards);
-        setStatus("ready");
-      } catch (err) {
-        console.error("Fetch error:", err);
-        setError("Failed to load secret");
-        setStatus("error");
-      }
-    };
-
-    fetchShards();
+    const hash = window.location.hash.substring(1);
+    if (!hash) {
+      setError("Missing decryption key in URL");
+      setStatus("error");
+      return;
+    }
+    setSeed(hash);
+    setStatus("ready");
   }, [secretId]);
 
+  // Returns null once the status has been set to expired or error
+  const fetchShards = async (): Promise<string[] | null> => {
+    try {
+      const response = await fetch(`/api/secrets/${secretId}`, { cache: "no-store" });
+
+      if (response.status === 404) {
+        setError("Secret not found or expired");
+        setStatus("expired");
+        return null;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch secret (HTTP ${response.status})`);
+      }
+
+      const data = await response.json();
+      setShards(data.shards);
+      return data.shards;
+    } catch (err) {
+      console.error("Fetch error:", err);
+      setError("Failed to load secret");
+      setStatus("error");
+      return null;
+    }
+  };
+
   const decryptSecret = async () => {
-    if (!shards || !seed || !inputPassword.trim()) {
+    if (!seed || !inputPassword.trim()) {
       setError("Password required");
       return;
     }
@@ -406,9 +406,16 @@ export default function ShortUrlViewer() {
     setIsDecrypting(true);
     setError("");
 
+    // Kept in state so a mistyped password can be retried without a second fetch
+    const currentShards = shards ?? (await fetchShards());
+    if (!currentShards) {
+      setIsDecrypting(false);
+      return;
+    }
+
     try {
       // Reconstruct encrypted data from shards
-      const { ciphertext, iv, salt } = await reconstructFromShards(shards, seed);
+      const { ciphertext, iv, salt } = await reconstructFromShards(currentShards, seed);
 
       // Decrypt
       const decrypted = await decryptText(
@@ -422,7 +429,7 @@ export default function ShortUrlViewer() {
       setStatus("decrypted");
     } catch (err) {
       console.error("Decrypt error:", err);
-      setError("Incorrect password or corrupted data");
+      setError("Incorrect password. The secret is no longer on the server: keep this page open to try again.");
     } finally {
       setIsDecrypting(false);
     }

@@ -30,7 +30,15 @@ interface RedisClientInterface {
   exists(...keys: string[]): Promise<number>;
   ttl(key: string): Promise<number>;
   mget(...keys: string[]): Promise<(string | null)[]>;
+  multi(): RedisTransaction;
   quit(): Promise<string>;
+}
+
+interface RedisTransaction {
+  get(key: string): RedisTransaction;
+  mget(...keys: string[]): RedisTransaction;
+  del(...keys: string[]): RedisTransaction;
+  exec(): Promise<[Error | null, unknown][] | null>;
 }
 
 // Redis client (initialized lazily)
@@ -159,10 +167,10 @@ export async function storeSecret(
 }
 
 /**
- * Retrieve shards by secret ID
- * Returns null if not found or expired
+ * Retrieve shards by secret ID and delete them in the same step (one-time view)
+ * Returns null if not found, expired or already consumed
  */
-export async function getSecret(id: string): Promise<ShardData | null> {
+export async function consumeSecret(id: string): Promise<ShardData | null> {
   // Validate ID format (only alphanumeric)
   if (!/^[A-Za-z0-9]{8}$/.test(id)) {
     return null;
@@ -171,10 +179,10 @@ export async function getSecret(id: string): Promise<ShardData | null> {
   const useRedis = await ensureRedisInitialized();
 
   if (useRedis && redisClient) {
-    return getSecretRedis(id);
+    return consumeSecretRedis(id);
   }
 
-  return getSecretMemory(id);
+  return consumeSecretMemory(id);
 }
 
 /**
@@ -194,23 +202,6 @@ export async function secretExists(id: string): Promise<boolean> {
   }
 
   return secretStore.has(id);
-}
-
-/**
- * Delete a secret (for one-time view, if implemented later)
- */
-export async function deleteSecret(id: string): Promise<boolean> {
-  if (!/^[A-Za-z0-9]{8}$/.test(id)) {
-    return false;
-  }
-
-  const useRedis = await ensureRedisInitialized();
-
-  if (useRedis && redisClient) {
-    return deleteSecretRedis(id);
-  }
-
-  return secretStore.delete(id);
 }
 
 // ============================================================================
@@ -241,78 +232,56 @@ async function storeSecretRedis(
   }
 }
 
-async function getSecretRedis(id: string): Promise<ShardData | null> {
+async function consumeSecretRedis(id: string): Promise<ShardData | null> {
   if (!redisClient) return null;
 
-  try {
-    // Get metadata first
-    const metaKey = `secret:${id}:meta`;
-    const metaStr = await redisClient.get(metaKey);
+  const metaKey = `secret:${id}:meta`;
+  // All possible shard keys, since shardCount is only known after reading metadata
+  const shardKeys = Array.from(
+    { length: SHARD_COUNT },
+    (_, i) => `secret:${id}:shard:${i}`
+  );
 
-    if (!metaStr) {
-      return null;
-    }
+  // Read and delete in one MULTI: two concurrent requests can never both get the shards
+  const results = await redisClient
+    .multi()
+    .get(metaKey)
+    .mget(...shardKeys)
+    .del(metaKey, ...shardKeys)
+    .exec();
 
-    const metadata: SecretMetadata = JSON.parse(metaStr);
+  if (!results) {
+    throw new Error(`Redis transaction aborted while consuming secret ${id}`);
+  }
+  const failed = results.find(([error]) => error);
+  if (failed) {
+    throw failed[0];
+  }
 
-    // Validate shardCount to prevent abuse from corrupted Redis data
-    if (!Number.isInteger(metadata.shardCount) || metadata.shardCount < 1 || metadata.shardCount > SHARD_COUNT) {
-      console.error(`[STORAGE] Invalid shardCount ${metadata.shardCount} for secret ${id}`);
-      await deleteSecretRedis(id);
-      return null;
-    }
-
-    // Get all shards
-    const shardKeys = Array.from(
-      { length: metadata.shardCount },
-      (_, i) => `secret:${id}:shard:${i}`
-    );
-
-    const shards = await redisClient.mget(...shardKeys);
-
-    // Verify all shards exist
-    if (shards.some(s => s === null)) {
-      // Partial data - delete everything and return null
-      await deleteSecretRedis(id);
-      return null;
-    }
-
-    return {
-      shards: shards as string[],
-      originalLength: 0, // Not stored, not needed for reconstruction
-    };
-  } catch (error) {
-    console.error('[STORAGE] Redis get error:', error);
+  const metaStr = results[0][1] as string | null;
+  if (!metaStr) {
     return null;
   }
-}
 
-async function deleteSecretRedis(id: string): Promise<boolean> {
-  if (!redisClient) return false;
+  const metadata: SecretMetadata = JSON.parse(metaStr);
 
-  try {
-    const metaKey = `secret:${id}:meta`;
-    const metaStr = await redisClient.get(metaKey);
-
-    if (!metaStr) return false;
-
-    const metadata: SecretMetadata = JSON.parse(metaStr);
-
-    // Delete all keys
-    const keys = [
-      metaKey,
-      ...Array.from(
-        { length: metadata.shardCount },
-        (_, i) => `secret:${id}:shard:${i}`
-      ),
-    ];
-
-    await redisClient.del(...keys);
-    return true;
-  } catch (error) {
-    console.error('[STORAGE] Redis delete error:', error);
-    return false;
+  // Validate shardCount to prevent abuse from corrupted Redis data
+  if (!Number.isInteger(metadata.shardCount) || metadata.shardCount < 1 || metadata.shardCount > SHARD_COUNT) {
+    console.error(`[STORAGE] Invalid shardCount ${metadata.shardCount} for secret ${id}`);
+    return null;
   }
+
+  const shards = (results[1][1] as (string | null)[]).slice(0, metadata.shardCount);
+
+  if (shards.some(s => s === null)) {
+    console.error(`[STORAGE] Missing shards for secret ${id}`);
+    return null;
+  }
+
+  return {
+    shards: shards as string[],
+    originalLength: 0, // Not stored, not needed for reconstruction
+  };
 }
 
 // ============================================================================
@@ -348,16 +317,17 @@ function storeSecretMemory(
   });
 }
 
-function getSecretMemory(id: string): ShardData | null {
+function consumeSecretMemory(id: string): ShardData | null {
   const stored = secretStore.get(id);
 
   if (!stored) {
     return null;
   }
 
+  secretStore.delete(id);
+
   // Check expiration
   if (Date.now() > stored.metadata.expiresAt) {
-    secretStore.delete(id);
     return null;
   }
 

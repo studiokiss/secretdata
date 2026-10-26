@@ -29,7 +29,9 @@ function buildCsp(nonce: string): string {
     isDev
       ? `script-src 'self' 'nonce-${nonce}' 'unsafe-eval'`
       : `script-src 'self' 'nonce-${nonce}'`,
-    `style-src 'self' 'nonce-${nonce}'`,
+    // Components use inline style attributes, which nonces never cover; a nonce here
+    // would also make browsers ignore 'unsafe-inline'. Scripts stay nonce-only.
+    "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     "connect-src 'self'",
@@ -100,6 +102,9 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
+  // Token revocation lives in Redis, and ioredis cannot load in the Edge runtime:
+  // there the revocation check silently fell back to an empty in-memory store.
+  runtime: 'nodejs',
   matcher: [
     // Match all pages and API routes (exclude static files)
     '/((?!_next/static|_next/image|favicon\\.ico|favicon\\.svg|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',

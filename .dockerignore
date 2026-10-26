@@ -1,0 +1,9 @@
+.env*
+!.env.example
+node_modules
+.next
+.git
+.claude
+.DS_Store
+logs
+coverage
