@@ -3,7 +3,8 @@
  *
  * Stores encrypted shards in Redis (production) or in-memory (development).
  * Each secret is split into multiple shards, stored with separate keys.
- * A secret disappears at expiration or once it has been read maxViews times.
+ * A secret disappears at expiration or once it has been read maxViews times
+ * (no view limit when maxViews is null).
  */
 
 import type { SecretMetadata } from './shards';
@@ -14,7 +15,7 @@ const SECRET_ID_PATTERN = /^[A-Za-z0-9]{8}$/;
 
 export interface ConsumedSecret {
   shards: string[];
-  remainingViews: number;
+  remainingViews: number | null;
 }
 
 export interface ActiveSecret {
@@ -22,8 +23,8 @@ export interface ActiveSecret {
   label: string;
   createdAt: number;
   expiresAt: number;
-  maxViews: number;
-  remainingViews: number;
+  maxViews: number | null;
+  remainingViews: number | null;
 }
 
 export interface StorageBackend {
@@ -78,7 +79,7 @@ export function isValidSecretId(id: string): boolean {
 
 export interface StoreSecretOptions {
   expiresAt: number;
-  maxViews: number;
+  maxViews: number | null;
   label: string;
 }
 

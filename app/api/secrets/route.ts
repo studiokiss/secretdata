@@ -19,9 +19,12 @@ const MIN_EXPIRATION_MS = 60 * 1000;
 const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
 
 // Returns the error message, or null when both fields are valid
+// maxViews null means unlimited views until expiration
 function validateViewsAndLabel(maxViews: unknown, label: unknown): string | null {
-  if (!Number.isInteger(maxViews) || (maxViews as number) < 1 || (maxViews as number) > MAX_VIEWS) {
-    return `Invalid view count (1 to ${MAX_VIEWS})`;
+  const isValidCount =
+    Number.isInteger(maxViews) && (maxViews as number) >= 1 && (maxViews as number) <= MAX_VIEWS;
+  if (maxViews !== null && !isValidCount) {
+    return `Invalid view count (1 to ${MAX_VIEWS}, or null for unlimited)`;
   }
   if (
     typeof label !== 'string' ||

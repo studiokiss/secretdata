@@ -10,6 +10,7 @@ import type Redis from 'ioredis';
 import type { ChainableCommander } from 'ioredis';
 import { type SecretMetadata, SHARD_COUNT } from './shards';
 import type { ActiveSecret, ConsumedSecret, StorageBackend } from './storage';
+import { computeRemainingViews } from './secret-limits';
 
 const INDEX_KEY = 'secrets:index';
 
@@ -24,16 +25,17 @@ const FIXED_KEY_COUNT = 3;
 
 // Counts the view and deletes on the last one in a single atomic step: concurrent
 // readers can never get more than maxViews copies of the shards.
-// Secrets stored before maxViews existed have no such field: they were one-time.
+// maxViews absent: stored before the field existed, those were one-time.
+// maxViews null (cjson.null): unlimited, only the TTL ends the secret.
 const CONSUME_SCRIPT = `
 local shardKeys = {unpack(KEYS, 4)}
 local meta = redis.call('GET', KEYS[1])
 if not meta then return false end
 local maxViews = cjson.decode(meta).maxViews
-if type(maxViews) ~= 'number' then maxViews = 1 end
+if maxViews == nil then maxViews = 1 end
 local views = redis.call('INCR', KEYS[2])
 local shards = redis.call('MGET', unpack(shardKeys))
-if views >= maxViews then
+if maxViews ~= cjson.null and views >= maxViews then
   redis.call('DEL', KEYS[1], KEYS[2], unpack(shardKeys))
   redis.call('ZREM', KEYS[3], ARGV[1])
 end
@@ -60,7 +62,11 @@ function parseMetadata(id: string, metaStr: string): SecretMetadata | null {
     console.error(`[STORAGE] Invalid shardCount ${shardCount} for secret ${id}`);
     return null;
   }
-  return { ...metadata, maxViews: metadata.maxViews ?? 1, label: metadata.label ?? '' };
+  return {
+    ...metadata,
+    maxViews: metadata.maxViews === undefined ? 1 : metadata.maxViews,
+    label: metadata.label ?? '',
+  };
 }
 
 async function store(client: Redis, id: string, shards: string[], metadata: SecretMetadata) {
@@ -98,7 +104,7 @@ async function consume(client: Redis, id: string): Promise<ConsumedSecret | null
 
   return {
     shards: shards as string[],
-    remainingViews: Math.max(0, metadata.maxViews - views),
+    remainingViews: computeRemainingViews(metadata.maxViews, views),
   };
 }
 
@@ -135,7 +141,7 @@ async function list(client: Redis): Promise<ActiveSecret[]> {
       createdAt: metadata.createdAt,
       expiresAt: metadata.expiresAt,
       maxViews: metadata.maxViews,
-      remainingViews: metadata.maxViews - Number(views[i]),
+      remainingViews: computeRemainingViews(metadata.maxViews, Number(views[i])),
     }];
   });
 }

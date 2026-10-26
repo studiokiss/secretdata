@@ -14,7 +14,7 @@ type Storage = typeof import('../../lib/storage');
 const ONE_HOUR = 60 * 60 * 1000;
 const shards = Array.from({ length: SHARD_COUNT }, (_, i) => `shard-${i}`);
 
-function storeOptions(maxViews = 1, label = '') {
+function storeOptions(maxViews: number | null = 1, label = '') {
   return { expiresAt: Date.now() + ONE_HOUR, maxViews, label };
 }
 
@@ -79,6 +79,17 @@ describe.each(backends)('storage (%s)', (_name, redisUrl) => {
       );
 
       expect(results.filter(r => r !== null)).toHaveLength(3);
+    });
+
+    it('never deletes an unlimited secret on read', async () => {
+      const { id } = await storage.storeSecret(shards, storeOptions(null));
+
+      const results = await Promise.all(
+        Array.from({ length: 20 }, () => storage.consumeSecret(id))
+      );
+
+      expect(results.every(r => r?.remainingViews === null)).toBe(true);
+      expect(await storage.secretExists(id)).toBe(true);
     });
 
     it('returns null for an unknown id', async () => {

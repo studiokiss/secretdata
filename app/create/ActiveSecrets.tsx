@@ -7,8 +7,8 @@ interface ActiveSecret {
   label: string;
   createdAt: number;
   expiresAt: number;
-  maxViews: number;
-  remainingViews: number;
+  maxViews: number | null;
+  remainingViews: number | null;
 }
 
 const MINUTE_MS = 60 * 1000;
@@ -114,7 +114,9 @@ function ActiveSecretRow({
         <span style={styles.label}>{secret.label || "Untitled"}</span>
         <span style={styles.meta}>
           {secret.id} · expires in {formatTimeLeft(secret.expiresAt)} ·{" "}
-          {secret.remainingViews}/{secret.maxViews} views left
+          {secret.maxViews === null
+            ? "unlimited views"
+            : `${secret.remainingViews}/${secret.maxViews} views left`}
         </span>
       </div>
       {isConfirming ? (

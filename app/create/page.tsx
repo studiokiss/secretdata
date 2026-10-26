@@ -330,7 +330,12 @@ const DURATIONS = [
   { value: "168", label: "1 week", display: "1 week" },
 ];
 
-const VIEW_OPTIONS = ["1", "2", "3", "5", "10"].map(value => ({ value, label: value }));
+const UNLIMITED_VIEWS = "unlimited";
+
+const VIEW_OPTIONS = [
+  ...["1", "2", "3", "5", "10"].map(value => ({ value, label: value })),
+  { value: UNLIMITED_VIEWS, label: "Unlimited" },
+];
 
 export default function SecretCreator() {
   const router = useRouter();
@@ -392,7 +397,7 @@ export default function SecretCreator() {
         body: JSON.stringify({
           shards,
           expiresAt: expiresAt.getTime(),
-          maxViews: parseInt(maxViews),
+          maxViews: maxViews === UNLIMITED_VIEWS ? null : parseInt(maxViews),
           label,
         }),
       });
@@ -482,7 +487,8 @@ export default function SecretCreator() {
               </div>
               <h1 style={styles.title}>Secret Ready</h1>
               <p style={styles.subtitle}>
-                Expires in {expirationLabel} or after {maxViews === "1" ? "1 view" : `${maxViews} views`}
+                Expires in {expirationLabel}
+                {maxViews === UNLIMITED_VIEWS ? "" : ` or after ${maxViews === "1" ? "1 view" : `${maxViews} views`}`}
               </p>
             </>
           ) : (

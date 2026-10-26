@@ -357,7 +357,8 @@ export default function ShortUrlViewer() {
 
   const [status, setStatus] = useState<"loading" | "ready" | "decrypted" | "error" | "expired">("loading");
   const [shards, setShards] = useState<string[] | null>(null);
-  const [remainingViews, setRemainingViews] = useState(0);
+  // null: unlimited views until expiration
+  const [remainingViews, setRemainingViews] = useState<number | null>(0);
   const [seed, setSeed] = useState<string | null>(null);
   const [inputPassword, setInputPassword] = useState("");
   const [decryptedSecret, setDecryptedSecret] = useState("");
@@ -379,7 +380,7 @@ export default function ShortUrlViewer() {
   }, [secretId]);
 
   // Returns null once the status has been set to expired or error
-  const fetchShards = async (): Promise<{ shards: string[]; remainingViews: number } | null> => {
+  const fetchShards = async (): Promise<{ shards: string[]; remainingViews: number | null } | null> => {
     try {
       const response = await fetch(`/api/secrets/${secretId}`, { cache: "no-store" });
 
@@ -439,7 +440,7 @@ export default function ShortUrlViewer() {
     } catch (err) {
       console.error("Decrypt error:", err);
       setError(
-        fetched.remainingViews > 0
+        fetched.remainingViews !== 0
           ? "Incorrect password. Keep this page open to try again: reloading it would use another view."
           : "Incorrect password. The secret is no longer on the server: keep this page open to try again."
       );
@@ -523,9 +524,11 @@ export default function ShortUrlViewer() {
 
         {status === "decrypted" && (
           <p style={styles.viewsNote}>
-            {remainingViews === 0
-              ? "This was the last view: the secret has been deleted from the server."
-              : `This link can be opened ${remainingViews} more time${remainingViews > 1 ? "s" : ""}.`}
+            {remainingViews === null
+              ? "This link stays readable until it expires."
+              : remainingViews === 0
+                ? "This was the last view: the secret has been deleted from the server."
+                : `This link can be opened ${remainingViews} more time${remainingViews > 1 ? "s" : ""}.`}
           </p>
         )}
 

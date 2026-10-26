@@ -4,6 +4,7 @@
 
 import type { SecretMetadata } from './shards';
 import type { ActiveSecret, ConsumedSecret, StorageBackend } from './storage';
+import { computeRemainingViews } from './secret-limits';
 
 const MEMORY_CLEANUP_INTERVAL_MS = 60 * 1000;
 
@@ -47,11 +48,11 @@ function consume(secretStore: SecretStore, id: string): ConsumedSecret | null {
   if (!stored) return null;
 
   stored.views += 1;
-  const remainingViews = stored.metadata.maxViews - stored.views;
-  if (remainingViews <= 0) {
+  const remainingViews = computeRemainingViews(stored.metadata.maxViews, stored.views);
+  if (remainingViews === 0) {
     secretStore.delete(id);
   }
-  return { shards: stored.shards, remainingViews: Math.max(0, remainingViews) };
+  return { shards: stored.shards, remainingViews };
 }
 
 function list(secretStore: SecretStore): ActiveSecret[] {
@@ -65,7 +66,7 @@ function list(secretStore: SecretStore): ActiveSecret[] {
       createdAt: metadata.createdAt,
       expiresAt: metadata.expiresAt,
       maxViews: metadata.maxViews,
-      remainingViews: metadata.maxViews - views,
+      remainingViews: computeRemainingViews(metadata.maxViews, views),
     });
   }
   return active.sort((a, b) => a.expiresAt - b.expiresAt);
