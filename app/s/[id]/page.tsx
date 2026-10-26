@@ -238,6 +238,12 @@ const styles = {
     fontSize: "14px",
     color: "var(--text-secondary)",
   },
+  viewsNote: {
+    fontSize: "13px",
+    color: "var(--text-tertiary)",
+    textAlign: "center" as const,
+    margin: "0 0 16px",
+  },
   label: {
     display: "block",
     fontSize: "13px",
@@ -351,6 +357,8 @@ export default function ShortUrlViewer() {
 
   const [status, setStatus] = useState<"loading" | "ready" | "decrypted" | "error" | "expired">("loading");
   const [shards, setShards] = useState<string[] | null>(null);
+  // null: unlimited views until expiration
+  const [remainingViews, setRemainingViews] = useState<number | null>(0);
   const [seed, setSeed] = useState<string | null>(null);
   const [inputPassword, setInputPassword] = useState("");
   const [decryptedSecret, setDecryptedSecret] = useState("");
@@ -358,8 +366,8 @@ export default function ShortUrlViewer() {
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
 
-  // Shards are fetched on decrypt, not on mount: the server deletes them on first
-  // fetch, so merely opening the link (or a link preview) must not burn the secret.
+  // Shards are fetched on decrypt, not on mount: every fetch counts as a view, so
+  // merely opening the link (or a link preview) must not use one up.
   useEffect(() => {
     const hash = window.location.hash.substring(1);
     if (!hash) {
@@ -372,7 +380,7 @@ export default function ShortUrlViewer() {
   }, [secretId]);
 
   // Returns null once the status has been set to expired or error
-  const fetchShards = async (): Promise<string[] | null> => {
+  const fetchShards = async (): Promise<{ shards: string[]; remainingViews: number | null } | null> => {
     try {
       const response = await fetch(`/api/secrets/${secretId}`, { cache: "no-store" });
 
@@ -388,7 +396,8 @@ export default function ShortUrlViewer() {
 
       const data = await response.json();
       setShards(data.shards);
-      return data.shards;
+      setRemainingViews(data.remainingViews);
+      return { shards: data.shards, remainingViews: data.remainingViews };
     } catch (err) {
       console.error("Fetch error:", err);
       setError("Failed to load secret");
@@ -406,16 +415,17 @@ export default function ShortUrlViewer() {
     setIsDecrypting(true);
     setError("");
 
-    // Kept in state so a mistyped password can be retried without a second fetch
-    const currentShards = shards ?? (await fetchShards());
-    if (!currentShards) {
+    // Kept in state so a mistyped password can be retried without a second fetch.
+    // State set by fetchShards is not visible in this closure: use its return value.
+    const fetched = shards ? { shards, remainingViews } : await fetchShards();
+    if (!fetched) {
       setIsDecrypting(false);
       return;
     }
 
     try {
       // Reconstruct encrypted data from shards
-      const { ciphertext, iv, salt } = await reconstructFromShards(currentShards, seed);
+      const { ciphertext, iv, salt } = await reconstructFromShards(fetched.shards, seed);
 
       // Decrypt
       const decrypted = await decryptText(
@@ -429,7 +439,11 @@ export default function ShortUrlViewer() {
       setStatus("decrypted");
     } catch (err) {
       console.error("Decrypt error:", err);
-      setError("Incorrect password. The secret is no longer on the server: keep this page open to try again.");
+      setError(
+        fetched.remainingViews !== 0
+          ? "Incorrect password. Keep this page open to try again: reloading it would use another view."
+          : "Incorrect password. The secret is no longer on the server: keep this page open to try again."
+      );
     } finally {
       setIsDecrypting(false);
     }
@@ -507,6 +521,16 @@ export default function ShortUrlViewer() {
             {status === "decrypted" ? "Decrypted successfully" : "Enter the password to decrypt"}
           </p>
         </div>
+
+        {status === "decrypted" && (
+          <p style={styles.viewsNote}>
+            {remainingViews === null
+              ? "This link stays readable until it expires."
+              : remainingViews === 0
+                ? "This was the last view: the secret has been deleted from the server."
+                : `This link can be opened ${remainingViews} more time${remainingViews > 1 ? "s" : ""}.`}
+          </p>
+        )}
 
         {error && <div style={styles.error}>{error}</div>}
 

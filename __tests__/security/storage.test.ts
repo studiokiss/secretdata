@@ -1,5 +1,5 @@
 /**
- * One-time view tests for the shard storage
+ * View-limit and deletion tests for the shard storage
  *
  * The Redis suite runs only when TEST_REDIS_URL is set, e.g.:
  *   docker run -d --rm -p 6390:6379 redis:7-alpine
@@ -12,18 +12,15 @@ import { SHARD_COUNT } from '../../lib/shards';
 type Storage = typeof import('../../lib/storage');
 
 const ONE_HOUR = 60 * 60 * 1000;
-const shardData = {
-  shards: Array.from({ length: SHARD_COUNT }, (_, i) => `shard-${i}`),
-  originalLength: 0,
-};
+const shards = Array.from({ length: SHARD_COUNT }, (_, i) => `shard-${i}`);
+
+function storeOptions(maxViews: number | null = 1, label = '') {
+  return { expiresAt: Date.now() + ONE_HOUR, maxViews, label };
+}
 
 async function loadStorage(redisUrl: string | undefined): Promise<Storage> {
   vi.resetModules();
-  if (redisUrl) {
-    vi.stubEnv('REDIS_URL', redisUrl);
-  } else {
-    vi.stubEnv('REDIS_URL', '');
-  }
+  vi.stubEnv('REDIS_URL', redisUrl ?? '');
   return import('../../lib/storage');
 }
 
@@ -32,7 +29,7 @@ if (process.env.TEST_REDIS_URL) {
   backends.push(['redis', process.env.TEST_REDIS_URL]);
 }
 
-describe.each(backends)('consumeSecret (%s)', (_name, redisUrl) => {
+describe.each(backends)('storage (%s)', (_name, redisUrl) => {
   let storage: Storage;
 
   beforeEach(async () => {
@@ -44,34 +41,94 @@ describe.each(backends)('consumeSecret (%s)', (_name, redisUrl) => {
     vi.unstubAllEnvs();
   });
 
-  it('returns the shards on first read', async () => {
-    const { id } = await storage.storeSecret(shardData, Date.now() + ONE_HOUR);
+  describe('consumeSecret', () => {
+    it('returns the shards on first read', async () => {
+      const { id } = await storage.storeSecret(shards, storeOptions());
 
-    const result = await storage.consumeSecret(id);
+      const result = await storage.consumeSecret(id);
 
-    expect(result?.shards).toEqual(shardData.shards);
+      expect(result).toEqual({ shards, remainingViews: 0 });
+    });
+
+    it('returns null on second read of a one-time secret', async () => {
+      const { id } = await storage.storeSecret(shards, storeOptions());
+
+      await storage.consumeSecret(id);
+
+      expect(await storage.consumeSecret(id)).toBeNull();
+      expect(await storage.secretExists(id)).toBe(false);
+    });
+
+    it('serves exactly maxViews reads, counting down', async () => {
+      const { id } = await storage.storeSecret(shards, storeOptions(3));
+
+      const remaining = [];
+      for (let i = 0; i < 3; i++) {
+        remaining.push((await storage.consumeSecret(id))?.remainingViews);
+      }
+
+      expect(remaining).toEqual([2, 1, 0]);
+      expect(await storage.consumeSecret(id)).toBeNull();
+    });
+
+    it('serves concurrent reads to exactly maxViews callers', async () => {
+      const { id } = await storage.storeSecret(shards, storeOptions(3));
+
+      const results = await Promise.all(
+        Array.from({ length: 10 }, () => storage.consumeSecret(id))
+      );
+
+      expect(results.filter(r => r !== null)).toHaveLength(3);
+    });
+
+    it('never deletes an unlimited secret on read', async () => {
+      const { id } = await storage.storeSecret(shards, storeOptions(null));
+
+      const results = await Promise.all(
+        Array.from({ length: 20 }, () => storage.consumeSecret(id))
+      );
+
+      expect(results.every(r => r?.remainingViews === null)).toBe(true);
+      expect(await storage.secretExists(id)).toBe(true);
+    });
+
+    it('returns null for an unknown id', async () => {
+      expect(await storage.consumeSecret('ABCDEFGH')).toBeNull();
+    });
   });
 
-  it('returns null on second read', async () => {
-    const { id } = await storage.storeSecret(shardData, Date.now() + ONE_HOUR);
+  describe('listSecrets', () => {
+    it('lists active secrets with their remaining views', async () => {
+      const { id } = await storage.storeSecret(shards, storeOptions(5, 'FTP client'));
+      await storage.consumeSecret(id);
 
-    await storage.consumeSecret(id);
+      const listed = (await storage.listSecrets()).find(s => s.id === id);
 
-    expect(await storage.consumeSecret(id)).toBeNull();
-    expect(await storage.secretExists(id)).toBe(false);
+      expect(listed).toMatchObject({ label: 'FTP client', maxViews: 5, remainingViews: 4 });
+    });
+
+    it('drops secrets read to the end', async () => {
+      const { id } = await storage.storeSecret(shards, storeOptions());
+      await storage.consumeSecret(id);
+
+      const ids = (await storage.listSecrets()).map(s => s.id);
+
+      expect(ids).not.toContain(id);
+    });
   });
 
-  it('serves concurrent reads to exactly one caller', async () => {
-    const { id } = await storage.storeSecret(shardData, Date.now() + ONE_HOUR);
+  describe('deleteSecret', () => {
+    it('makes the secret unreadable and unlisted', async () => {
+      const { id } = await storage.storeSecret(shards, storeOptions(5));
 
-    const results = await Promise.all(
-      Array.from({ length: 10 }, () => storage.consumeSecret(id))
-    );
+      expect(await storage.deleteSecret(id)).toBe(true);
 
-    expect(results.filter(r => r !== null)).toHaveLength(1);
-  });
+      expect(await storage.consumeSecret(id)).toBeNull();
+      expect((await storage.listSecrets()).map(s => s.id)).not.toContain(id);
+    });
 
-  it('returns null for an unknown id', async () => {
-    expect(await storage.consumeSecret('ABCDEFGH')).toBeNull();
+    it('returns false for an unknown id', async () => {
+      expect(await storage.deleteSecret('ABCDEFGH')).toBe(false);
+    });
   });
 });

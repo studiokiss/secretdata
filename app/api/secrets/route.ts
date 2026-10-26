@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { storeSecret } from '@/lib/storage';
+import { storeSecret, listSecrets } from '@/lib/storage';
 import { SHARD_COUNT } from '@/lib/shards';
-import { verifyToken, AUTH_COOKIE_NAME } from '@/lib/auth';
+import { rejectUnauthenticated } from '@/lib/api-auth';
+import { MAX_LABEL_LENGTH, MAX_VIEWS } from '@/lib/secret-limits';
 
 // Max payload size (100KB for shards)
 const MAX_PAYLOAD_SIZE = 100 * 1024;
@@ -15,16 +16,49 @@ const MAX_EXPIRATION_MS = 7 * 24 * 60 * 60 * 1000;
 // Min expiration time (1 minute)
 const MIN_EXPIRATION_MS = 60 * 1000;
 
+const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+
+// Returns the error message, or null when both fields are valid
+// maxViews null means unlimited views until expiration
+function validateViewsAndLabel(maxViews: unknown, label: unknown): string | null {
+  const isValidCount =
+    Number.isInteger(maxViews) && (maxViews as number) >= 1 && (maxViews as number) <= MAX_VIEWS;
+  if (maxViews !== null && !isValidCount) {
+    return `Invalid view count (1 to ${MAX_VIEWS}, or null for unlimited)`;
+  }
+  if (
+    typeof label !== 'string' ||
+    label.length > MAX_LABEL_LENGTH ||
+    CONTROL_CHARS.test(label)
+  ) {
+    return `Invalid label (max ${MAX_LABEL_LENGTH} characters)`;
+  }
+  return null;
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const unauthorized = await rejectUnauthenticated(request);
+    if (unauthorized) return unauthorized;
+
+    const secrets = await listSecrets();
+    return NextResponse.json(
+      { secrets },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
+  } catch (error) {
+    console.error('[API/SECRETS] GET list error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
-    // Defense in depth: verify auth in handler (in addition to middleware)
-    const token = request.cookies.get(AUTH_COOKIE_NAME)?.value;
-    if (!token || !(await verifyToken(token))) {
-      return NextResponse.json(
-        { error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
+    const unauthorized = await rejectUnauthenticated(request);
+    if (unauthorized) return unauthorized;
 
     // Check content length header, then verify actual body size
     const contentLength = request.headers.get('content-length');
@@ -45,7 +79,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { shards, expiresAt } = body;
+    const { shards, expiresAt, maxViews, label } = body;
 
     // Validate shards
     if (!Array.isArray(shards)) {
@@ -111,11 +145,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store shards
-    const result = await storeSecret(
-      { shards, originalLength: 0 },
-      expiresAt
-    );
+    const viewsOrLabelError = validateViewsAndLabel(maxViews, label);
+    if (viewsOrLabelError) {
+      return NextResponse.json({ error: viewsOrLabelError }, { status: 400 });
+    }
+
+    const result = await storeSecret(shards, {
+      expiresAt,
+      maxViews,
+      label: label.trim(),
+    });
 
     return NextResponse.json({
       id: result.id,

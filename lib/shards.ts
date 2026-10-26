@@ -241,6 +241,9 @@ export interface SecretMetadata {
   shardCount: number;
   expiresAt: number;
   createdAt: number;
+  maxViews: number | null; // null: unlimited until expiration
+  // Stored in clear: lets the admin recognise a link, must never hold sensitive data
+  label: string;
 }
 
 /**
