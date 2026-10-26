@@ -17,7 +17,7 @@
     "nextjs"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "next dev --turbopack",
@@ -29,22 +29,22 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "next": "^15.5.15",
-    "react": "19.1.4",
-    "react-dom": "19.1.4"
+    "next": "^15.5.28",
+    "react": "19.1.10",
+    "react-dom": "19.1.10"
   },
   "optionalDependencies": {
     "ioredis": "^5.4.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
-    "@types/node": "^20",
+    "@types/node": "^22.20.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@vitest/coverage-v8": "^4.0.16",
+    "@vitest/coverage-v8": "^4.1.12",
     "eslint": "^9",
-    "eslint-config-next": "15.5.9",
+    "eslint-config-next": "15.5.28",
     "typescript": "^5",
-    "vitest": "^4.0.16"
+    "vitest": "^4.1.12"
   }
 }
