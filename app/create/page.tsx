@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import OptionGroup from "./OptionGroup";
+import ActiveSecrets from "./ActiveSecrets";
+import { MAX_LABEL_LENGTH } from "@/lib/secret-limits";
 
 // ============================================================================
 // Crypto utilities
@@ -327,10 +330,14 @@ const DURATIONS = [
   { value: "168", label: "1 week", display: "1 week" },
 ];
 
+const VIEW_OPTIONS = ["1", "2", "3", "5", "10"].map(value => ({ value, label: value }));
+
 export default function SecretCreator() {
   const router = useRouter();
   const [secretText, setSecretText] = useState("");
   const [duration, setDuration] = useState("24");
+  const [maxViews, setMaxViews] = useState("1");
+  const [label, setLabel] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [generatedLink, setGeneratedLink] = useState("");
   const [generatedPassword, setGeneratedPassword] = useState("");
@@ -385,6 +392,8 @@ export default function SecretCreator() {
         body: JSON.stringify({
           shards,
           expiresAt: expiresAt.getTime(),
+          maxViews: parseInt(maxViews),
+          label,
         }),
       });
 
@@ -402,6 +411,7 @@ export default function SecretCreator() {
       setGeneratedLink(link);
       setGeneratedPassword(password);
       setSecretText("");
+      setLabel("");
     } catch (err) {
       console.error("Create error:", err);
       setError(err instanceof Error ? err.message : "Failed to create secret");
@@ -472,7 +482,7 @@ export default function SecretCreator() {
               </div>
               <h1 style={styles.title}>Secret Ready</h1>
               <p style={styles.subtitle}>
-                Expires in {expirationLabel}
+                Expires in {expirationLabel} or after {maxViews === "1" ? "1 view" : `${maxViews} views`}
               </p>
             </>
           ) : (
@@ -611,36 +621,43 @@ export default function SecretCreator() {
               </div>
             </div>
 
-            {/* Duration Selector */}
+            <OptionGroup
+              id="duration"
+              label="Expires after"
+              options={DURATIONS.map(d => ({ value: d.value, label: d.display }))}
+              value={duration}
+              onChange={setDuration}
+            />
+
+            <OptionGroup
+              id="max-views"
+              label="Views allowed"
+              options={VIEW_OPTIONS}
+              value={maxViews}
+              onChange={setMaxViews}
+            />
+
             <div style={styles.formGroup}>
-              <label id="duration-label" style={styles.label}>Expires after</label>
-              <div style={styles.durationGrid} role="radiogroup" aria-labelledby="duration-label">
-                {DURATIONS.map((d) => (
-                  <button
-                    key={d.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={duration === d.value}
-                    onClick={() => setDuration(d.value)}
-                    style={{
-                      ...styles.durationOption,
-                      ...(duration === d.value ? styles.durationOptionActive : {}),
-                    }}
-                    onMouseEnter={(e) => {
-                      if (duration !== d.value) {
-                        e.currentTarget.style.borderColor = "#0000FF";
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (duration !== d.value) {
-                        e.currentTarget.style.borderColor = "var(--border-color)";
-                      }
-                    }}
-                  >
-                    {d.display}
-                  </button>
-                ))}
-              </div>
+              <label htmlFor="secret-label" style={styles.label}>
+                Label <span style={styles.labelHint}>(optional, stored unencrypted)</span>
+              </label>
+              <input
+                id="secret-label"
+                type="text"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                maxLength={MAX_LABEL_LENGTH}
+                placeholder="To find this link in the active list"
+                style={styles.input}
+                onFocus={(e) => {
+                  e.currentTarget.style.borderColor = "#0000FF";
+                  e.currentTarget.style.boxShadow = "0 0 0 3px rgba(0, 0, 255, 0.1)";
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = "var(--border-color)";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              />
             </div>
 
             {/* Submit Button */}
@@ -687,6 +704,7 @@ export default function SecretCreator() {
           </div>
         )}
       </div>
+      <ActiveSecrets refreshKey={generatedLink} />
     </div>
   );
 }
@@ -915,28 +933,19 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: "8px",
     textAlign: "right",
   },
-  durationGrid: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: "8px",
+  labelHint: {
+    fontWeight: 400,
+    color: "var(--text-tertiary)",
   },
-  durationOption: {
+  input: {
+    width: "100%",
     padding: "10px 14px",
     backgroundColor: "var(--bg-tertiary)",
-    borderWidth: "1px",
-    borderStyle: "solid",
-    borderColor: "var(--border-color)",
+    border: "1px solid var(--border-color)",
     borderRadius: "8px",
-    cursor: "pointer",
-    transition: "all 0.15s ease",
-    fontSize: "13px",
-    fontWeight: 500,
-    color: "var(--text-secondary)",
-  },
-  durationOptionActive: {
-    backgroundColor: "#0000FF",
-    borderColor: "#0000FF",
-    color: "white",
+    color: "var(--text-primary)",
+    fontSize: "14px",
+    outline: "none",
   },
   primaryButton: {
     width: "100%",

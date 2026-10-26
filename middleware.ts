@@ -80,8 +80,11 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Protect /api/secrets POST only (GET is public for viewing)
-  if (pathname === '/api/secrets' && method === 'POST') {
+  // Admin API: create, list and delete. GET /api/secrets/<id> stays public for viewing
+  const isAdminApi =
+    pathname === '/api/secrets' ||
+    (pathname.startsWith('/api/secrets/') && method === 'DELETE');
+  if (isAdminApi) {
     const isAuthenticated = await verifyAuth(request);
 
     if (!isAuthenticated) {
